@@ -34,6 +34,25 @@ scripts/        validate-roster.mjs, headless-smoke.mjs
 docs/           GAME_DESIGN.md — roster, especiales, controles, sistema.
 ```
 
+## Jugar
+
+`npm install && npm run dev` → abre el Vite URL.
+
+- **Título** → Enter.
+- **Modo**: `VERSUS` (dos jugadores, un teclado) o `ARCADE`
+  (escalera de 8 rivales contra la CPU, dificultad creciente,
+  escenarios rotando, final "¡EL MÁS SABIO!").
+- **Select**: grid 3×3 con retratos pixel generados en runtime.
+  En versus cada jugador mueve su propio cursor
+  (P1: WASD + F · P2: flechas + ,).
+- **Escenario**: Ágora, Liceo o Escuela de Atenas.
+- **Fin de match**: Enter revancha (o siguiente rival en arcade),
+  Esc vuelve al título.
+
+Deep links para probar sin menús:
+`/?p1=kant&p2=nietzsche&stage=lyceum` · `/?cpu=1&d=0.9` (arcade directo)
+· `/?test=1` (hook `window.__FIGHT__` para e2e).
+
 ## Diseño
 
 Ver [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) — roster completo,
