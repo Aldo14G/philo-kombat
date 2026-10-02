@@ -1,5 +1,7 @@
 import { CONFIG } from './config.js';
 import { EMPTY_INPUT } from './types.js';
+import { MOVES } from './moves.js';
+import type { MoveDef } from './moves.js';
 import type { FightEvent, FightEventBody, FightState, FighterInput, FighterState, FighterId, Phase, StageId } from './types.js';
 
 const U = CONFIG.unitsPerPixel;
@@ -18,6 +20,7 @@ function fighter(rosterId: FighterId, x: number, facing: 1 | -1): FighterState {
     x,
     y: 0,
     vy: 0,
+    vx: 0,
     facing,
     health: CONFIG.maxHealth,
     status: 'idle',
@@ -26,6 +29,7 @@ function fighter(rosterId: FighterId, x: number, facing: 1 | -1): FighterState {
     blocking: false,
     rounds: 0,
     specialCooldown: 0,
+    attackSeq: 0,
     pendingEdge: 0,
     lastInputMask: 0,
     lastHitBy: null,
@@ -71,6 +75,34 @@ export function inputPressed(f: FighterState, bit: number): boolean {
 
 const FREE: ReadonlySet<FighterState['status']> = new Set(['idle', 'walk', 'crouch']);
 
+const ATTACK_BITS: ReadonlyArray<[number, string]> = [
+  [1, 'lp'],
+  [2, 'hp'],
+  [4, 'lk'],
+  [8, 'hk'],
+];
+
+function moveTotal(m: MoveDef): number {
+  return m.startup + m.active + m.recovery;
+}
+
+/** Grounded fighters in control can start an attack on a fresh button edge. */
+function tryStartAttack(state: FightState, events: FightEvent[], side: 'p1' | 'p2', f: FighterState): void {
+  if (f.y !== 0 || !FREE.has(f.status)) return;
+  for (const [bit, id] of ATTACK_BITS) {
+    if (inputPressed(f, bit)) {
+      const move = MOVES[id]!;
+      f.status = 'attack';
+      f.moveId = id;
+      f.statusTicks = moveTotal(move);
+      f.attackSeq += 1;
+      f.blocking = false;
+      emit(state, events, { type: 'attackStarted', fighter: side, moveId: id });
+      return;
+    }
+  }
+}
+
 function applyMovement(state: FightState, f: FighterState, input: FighterInput): void {
   if (!FREE.has(f.status)) {
     f.blocking = false;
@@ -80,7 +112,9 @@ function applyMovement(state: FightState, f: FighterState, input: FighterInput):
   const backward = f.facing === 1 ? input.left : input.right;
   const onGround = f.y === 0;
 
-  f.blocking = onGround && backward && !input.down && state.phase === 'fighting';
+  // Blocking: holding "away" on the ground. Standing by default; adding
+  // `down` makes it a low block (the crouch branch below still applies).
+  f.blocking = onGround && backward && state.phase === 'fighting';
 
   if (onGround && input.down) {
     f.status = 'crouch';
@@ -101,7 +135,65 @@ function applyMovement(state: FightState, f: FighterState, input: FighterInput):
   f.status = onGround ? 'idle' : 'jump';
 }
 
+/** Does `move` land on `victim` right now, and is it blocked? */
+function resolveHit(attacker: FighterState, victim: FighterState, move: MoveDef): 'hit' | 'blocked' | null {
+  const edgeDist = Math.abs(victim.x - attacker.x) - 2 * CONFIG.fighterHalfWidth * U;
+  if (edgeDist > move.reach * U) return null;
+  if (move.height === 'high' && victim.status === 'crouch') return null;
+  if (victim.blocking && move.height !== 'unblockable') {
+    const lowBlock = victim.status === 'crouch';
+    if (move.height === 'mid' || (move.height === 'low' && lowBlock) || (move.height === 'overhead' && !lowBlock) || move.height === 'high') {
+      return 'blocked';
+    }
+  }
+  return 'hit';
+}
+
+function resolveAttacks(state: FightState, events: FightEvent[]): void {
+  for (const [side, attacker, victim] of [
+    ['p1', state.p1, state.p2],
+    ['p2', state.p2, state.p1],
+  ] as const) {
+    if ((attacker.status !== 'attack' && attacker.status !== 'special') || !attacker.moveId) continue;
+    const move = MOVES[attacker.moveId];
+    if (!move) continue;
+    const elapsed = moveTotal(move) - attacker.statusTicks;
+    const inActive = elapsed >= move.startup && elapsed < move.startup + move.active;
+    const attackTag = `${side}:${attacker.attackSeq}`;
+    if (!inActive || victim.lastHitBy === attackTag) continue;
+
+    switch (resolveHit(attacker, victim, move)) {
+      case 'hit': {
+        victim.lastHitBy = attackTag;
+        const damage = attacker.empowered ? move.damage * 2 : move.damage;
+        attacker.empowered = false;
+        victim.health = Math.max(0, victim.health - damage);
+        victim.status = 'hitstun';
+        victim.statusTicks = move.hitstun;
+        victim.moveId = null;
+        victim.blocking = false;
+        victim.vx = move.knockback * attacker.facing;
+        emit(state, events, { type: 'hit', fighter: side, moveId: move.id, damage });
+        break;
+      }
+      case 'blocked': {
+        victim.lastHitBy = attackTag;
+        victim.health = Math.max(0, victim.health - move.chip);
+        victim.status = 'blockstun';
+        victim.statusTicks = move.blockstun;
+        victim.vx = (move.knockback / 2) * attacker.facing;
+        emit(state, events, { type: 'blocked', fighter: side, moveId: move.id });
+        break;
+      }
+    }
+  }
+}
+
 function applyPhysics(f: FighterState): void {
+  if (f.vx !== 0) {
+    f.x += f.vx;
+    f.vx -= Math.trunc(f.vx / 5) || Math.sign(f.vx);
+  }
   if (f.status === 'jump' || f.y > 0) {
     f.y += f.vy;
     f.vy -= CONFIG.gravity;
@@ -155,6 +247,8 @@ function resetRoundPositions(state: FightState): void {
     f.x = x;
     f.y = 0;
     f.vy = 0;
+    f.vx = 0;
+    f.specialCooldown = 0;
     f.facing = facing;
     f.health = CONFIG.maxHealth;
     f.status = 'idle';
@@ -194,7 +288,13 @@ export function stepFight(state: FightState, p1Input: FighterInput = EMPTY_INPUT
     f.pendingEdge = mask & ~f.lastInputMask;
     f.lastInputMask = mask;
     if (f.specialCooldown > 0) f.specialCooldown -= 1;
-    if (f.statusTicks > 0) f.statusTicks -= 1;
+    if (f.statusTicks > 0) {
+      f.statusTicks -= 1;
+      if (f.statusTicks === 0 && (f.status === 'attack' || f.status === 'hitstun' || f.status === 'blockstun' || f.status === 'special')) {
+        f.status = 'idle';
+        f.moveId = null;
+      }
+    }
   }
 
   switch (state.phase) {
@@ -206,8 +306,11 @@ export function stepFight(state: FightState, p1Input: FighterInput = EMPTY_INPUT
       break;
     }
     case 'fighting': {
+      tryStartAttack(state, events, 'p1', state.p1);
+      tryStartAttack(state, events, 'p2', state.p2);
       applyMovement(state, state.p1, p1Input);
       applyMovement(state, state.p2, p2Input);
+      resolveAttacks(state, events);
       state.phaseTicks -= 1;
       if (state.p1.health <= 0 || state.p2.health <= 0) {
         const loser = state.p1.health <= 0 ? 'p1' : 'p2';
