@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { CONFIG, rosterEntry } from '@philo-kombat/core';
-import type { FightState, FighterState } from '@philo-kombat/core';
+import type { FightState, FighterInput, FighterState } from '@philo-kombat/core';
 import { FightSession } from '../session/FightSession.js';
 import { DualKeyboardInput } from '../input.js';
 import { FLOOR_Y, drawStage } from '../pixel/stages.js';
@@ -29,6 +29,10 @@ function poseFor(f: FighterState, tick: number): PoseName {
 
 export class FightScene extends Phaser.Scene {
   private fighters!: { p1: Phaser.GameObjects.Image; p2: Phaser.GameObjects.Image };
+  private projectiles = new Map<number, Phaser.GameObjects.Image>();
+  /** When set, side's input comes from the CPU instead of the keyboard. */
+  cpuSide: 'p1' | 'p2' | null = null;
+  cpuInput?: { current(snap: FightState, side: 'p1' | 'p2'): FighterInput };
 
   constructor(
     private readonly fight: FightSession,
@@ -48,6 +52,18 @@ export class FightScene extends Phaser.Scene {
       return this.add.image(0, 0, `${f.rosterId}:idle`).setOrigin(0.5, 1).setScale(3);
     };
     this.fighters = { p1: mk(snap.p1), p2: mk(snap.p2) };
+
+    // projectile orb texture
+    const orb = document.createElement('canvas');
+    orb.width = 6;
+    orb.height = 6;
+    const c = orb.getContext('2d')!;
+    c.fillStyle = '#c9b458';
+    c.fillRect(1, 0, 4, 6);
+    c.fillRect(0, 1, 6, 4);
+    c.fillStyle = '#f2e6c9';
+    c.fillRect(2, 2, 2, 2);
+    this.textures.addCanvas('projectile', orb);
   }
 
   private registerAllPoses(rosterId: string, look: string): void {
@@ -70,13 +86,40 @@ export class FightScene extends Phaser.Scene {
   }
 
   override update(_time: number, delta: number): void {
-    const [i1, i2] = this.keys.current();
+    const [k1, k2] = this.keys.current();
+    let i1 = k1;
+    let i2 = k2;
+    if (this.cpuSide && this.cpuInput) {
+      const cpu = this.cpuInput.current(this.fight.snapshot(), this.cpuSide);
+      if (this.cpuSide === 'p1') i1 = cpu; else i2 = cpu;
+    }
     this.fight.advance(delta, i1, i2);
     const snap = this.fight.snapshot();
     this.renderFighter(this.fighters.p1, snap.p1, snap.tick);
     this.renderFighter(this.fighters.p2, snap.p2, snap.tick);
+    this.renderProjectiles(snap);
     this.ui.update(snap);
     for (const ev of this.fight.drainEvents()) this.ui.announce(ev, snap);
+  }
+
+  private renderProjectiles(snap: FightState): void {
+    const seen = new Set<number>();
+    for (const p of snap.projectiles) {
+      seen.add(p.id);
+      let img = this.projectiles.get(p.id);
+      if (!img) {
+        img = this.add.image(0, 0, 'projectile').setScale(3).setOrigin(0.5);
+        this.projectiles.set(p.id, img);
+      }
+      img.setPosition(p.x / U, FLOOR_Y - 14);
+      img.setAngle((snap.tick * 12) % 360);
+    }
+    for (const [id, img] of this.projectiles) {
+      if (!seen.has(id)) {
+        img.destroy();
+        this.projectiles.delete(id);
+      }
+    }
   }
 
   private renderFighter(sprite: Phaser.GameObjects.Image, f: FighterState, tick: number): void {

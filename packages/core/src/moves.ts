@@ -57,6 +57,7 @@ export interface SpecialDef {
   name: string;
   kind: SpecialKind;
   damage: number;
+  chip: number;
   startup: number;
   active: number;
   recovery: number;
@@ -64,4 +65,5 @@ export interface SpecialDef {
   height: MoveHeight;
   knockback: number;
   hitstun: number;
+  blockstun: number;
 }
