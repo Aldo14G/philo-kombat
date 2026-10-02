@@ -44,6 +44,8 @@ export interface FighterState {
   x: number;
   y: number;
   vy: number;
+  /** Knockback momentum, units/tick; decays toward 0. */
+  vx: number;
   /** +1 faces right, −1 faces left (always toward the opponent). */
   facing: 1 | -1;
   health: number;
@@ -58,6 +60,8 @@ export interface FighterState {
   rounds: number;
   /** Ticks until the signature special is available again. */
   specialCooldown: number;
+  /** Per-fighter counter incremented on each attack start; tags hits. */
+  attackSeq: number;
   /** Button-edge bitmask consumed this tick (computed each step). */
   pendingEdge: number;
   /** seq of the last button edge already consumed, per button. */
