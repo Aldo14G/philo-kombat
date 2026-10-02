@@ -32,20 +32,32 @@ export class FightScene extends Phaser.Scene {
   private projectiles = new Map<number, Phaser.GameObjects.Image>();
   /** When set, side's input comes from the CPU instead of the keyboard. */
   cpuSide: 'p1' | 'p2' | null = null;
-  cpuInput?: { current(snap: FightState, side: 'p1' | 'p2'): FighterInput };
+  cpuInput: { current(snap: FightState, side: 'p1' | 'p2'): FighterInput } | undefined;
+  onMatchEnd?: (winner: 'p1' | 'p2', snap: FightState) => void;
+  private ended = false;
 
   constructor(
-    private readonly fight: FightSession,
+    private fight: FightSession,
     private readonly keys: DualKeyboardInput,
     private readonly ui: Hud,
   ) {
     super('fight');
   }
 
+  /** Swap in a fresh match and rebuild stage/fighters. */
+  setSession(session: FightSession): void {
+    this.fight = session;
+    this.ended = false;
+    this.projectiles.forEach((img) => img.destroy());
+    this.projectiles.clear();
+    this.scene?.restart();
+  }
+
   create(): void {
     const snap = this.fight.snapshot();
-    this.textures.addCanvas('stage', drawStage(snap.stage));
-    this.add.image(0, 0, 'stage').setOrigin(0);
+    const stageKey = `stage-${snap.stage}`;
+    if (!this.textures.exists(stageKey)) this.textures.addCanvas(stageKey, drawStage(snap.stage));
+    this.add.image(0, 0, stageKey).setOrigin(0);
 
     const mk = (f: FighterState) => {
       this.registerAllPoses(f.rosterId, rosterEntry(f.rosterId).look);
@@ -63,7 +75,7 @@ export class FightScene extends Phaser.Scene {
     c.fillRect(0, 1, 6, 4);
     c.fillStyle = '#f2e6c9';
     c.fillRect(2, 2, 2, 2);
-    this.textures.addCanvas('projectile', orb);
+    if (!this.textures.exists('projectile')) this.textures.addCanvas('projectile', orb);
   }
 
   private registerAllPoses(rosterId: string, look: string): void {
@@ -99,7 +111,13 @@ export class FightScene extends Phaser.Scene {
     this.renderFighter(this.fighters.p2, snap.p2, snap.tick);
     this.renderProjectiles(snap);
     this.ui.update(snap);
-    for (const ev of this.fight.drainEvents()) this.ui.announce(ev, snap);
+    for (const ev of this.fight.drainEvents()) {
+      this.ui.announce(ev, snap);
+      if (ev.type === 'matchWon' && !this.ended) {
+        this.ended = true;
+        this.onMatchEnd?.(ev.winner, snap);
+      }
+    }
   }
 
   private renderProjectiles(snap: FightState): void {
