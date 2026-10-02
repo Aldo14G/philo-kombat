@@ -1,0 +1,21 @@
+import { fileURLToPath } from 'node:url';
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    include: ['test/**/*.test.ts'], // e2e/ belongs to Playwright
+  },
+  resolve: {
+    alias: {
+      // Consume the core TypeScript source directly for dev/HMR. The package's
+      // own exports point at dist/, which is what real Node resolution uses
+      // (proven by `npm run validate` and `npm run smoke`).
+      '@philo-kombat/core': fileURLToPath(
+        new URL('../../packages/core/src/index.ts', import.meta.url),
+      ),
+    },
+  },
+  build: {
+    target: 'es2022',
+  },
+});

@@ -1,0 +1,24 @@
+{
+  "name": "philo-kombat",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Philo Kombat — a Mortal Kombat-lite fighting game where nine philosophers duel for truth. Deterministic core + Phaser renderer + PUXEL arcade UI.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @philo-kombat/web",
+    "build": "npm run build --workspace @philo-kombat/core && npm run build --workspace @philo-kombat/web",
+    "preview": "npm run preview --workspace @philo-kombat/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "validate": "npm run build --workspace @philo-kombat/core --silent && node scripts/validate-roster.mjs",
+    "smoke": "npm run build --workspace @philo-kombat/core --silent && node scripts/headless-smoke.mjs",
+    "test:e2e": "npm run test:e2e --workspace @philo-kombat/web"
+  }
+}

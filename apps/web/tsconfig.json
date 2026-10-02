@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "types": ["vite/client"],
+    "paths": {
+      "@philo-kombat/core": ["../../packages/core/src/index.ts"]
+    }
+  },
+  "include": ["src", "e2e", "test", "vite.config.ts", "playwright.config.ts"]
+}
