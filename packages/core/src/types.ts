@@ -70,6 +70,22 @@ export interface FighterState {
   lastHitBy: string | null;
   /** Hegel-style charge: absorbs the next hit, then empowers the next attack. */
   empowered: boolean;
+  /** Tick until which incoming melee hits are absorbed/countered (0 = off). */
+  absorbUntil: number;
+  /** Pending teleport target for Lacan's El Otro (applied at startup end). */
+  teleportPending: boolean;
+}
+
+/** A travelling hitbox spawned by projectile specials. */
+export interface ProjectileState {
+  id: number;
+  owner: 'p1' | 'p2';
+  moveId: string;
+  x: number;
+  y: number;
+  vx: number;
+  /** Ticks of life remaining. */
+  ttl: number;
 }
 
 export interface FightState {
@@ -81,6 +97,8 @@ export interface FightState {
   stage: StageId;
   p1: FighterState;
   p2: FighterState;
+  projectiles: ProjectileState[];
+  nextProjectileId: number;
   nextEventSeq: number;
   config: typeof CONFIG;
   seed: number;
@@ -109,7 +127,9 @@ export type FightEvent =
   | { seq: number; tick: number; type: 'timeUp'; winner: 'p1' | 'p2' | null }
   | { seq: number; tick: number; type: 'roundWon'; winner: 'p1' | 'p2' }
   | { seq: number; tick: number; type: 'matchWon'; winner: 'p1' | 'p2' }
-  | { seq: number; tick: number; type: 'specialUsed'; fighter: 'p1' | 'p2'; moveId: string };
+  | { seq: number; tick: number; type: 'specialUsed'; fighter: 'p1' | 'p2'; moveId: string }
+  | { seq: number; tick: number; type: 'countered'; fighter: 'p1' | 'p2'; moveId: string }
+  | { seq: number; tick: number; type: 'projectileSpawned'; fighter: 'p1' | 'p2'; moveId: string };
 
 export const EMPTY_INPUT: FighterInput = {
   left: false,

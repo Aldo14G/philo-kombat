@@ -6,11 +6,14 @@ import { DualKeyboardInput } from './input.js';
 import { FightScene } from './scene/FightScene.js';
 import { FLOOR_Y } from './pixel/stages.js';
 import { Hud } from './ui/hud.js';
+import { CpuInput } from './ai/cpu.js';
 
 const params = new URLSearchParams(window.location.search);
 const p1 = (params.get('p1') ?? 'socrates') as FighterId;
 const p2 = (params.get('p2') ?? 'plato') as FighterId;
 const stage = (params.get('stage') ?? 'agora') as StageId;
+const cpu = params.get('cpu') === '1';
+const difficulty = Math.min(1, Math.max(0, Number(params.get('d') ?? '0.5')));
 
 const session = new FightSession(p1, p2, stage, 1);
 const input = new DualKeyboardInput();
@@ -18,6 +21,10 @@ input.attach();
 const hud = new Hud();
 
 const scene = new FightScene(session, input, hud);
+if (cpu) {
+  scene.cpuSide = 'p2';
+  scene.cpuInput = new CpuInput(difficulty);
+}
 
 new Phaser.Game({
   type: Phaser.AUTO,

@@ -45,7 +45,10 @@ test('a punch in range drains the opponent health bar', async ({ page }) => {
   await page.keyboard.down('ArrowLeft');
   await page.waitForTimeout(2500);
   await page.keyboard.up('ArrowLeft');
-  await page.keyboard.press('f');
+  // hold the key long enough for a headless frame to sample it
+  await page.keyboard.down('f');
+  await page.waitForTimeout(300);
+  await page.keyboard.up('f');
   await page.waitForTimeout(900);
   const s = await snap(page);
   expect(s.p2.health).toBeLessThan(1000);

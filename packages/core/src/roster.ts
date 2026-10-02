@@ -20,8 +20,10 @@ const special = (p: Pick<SpecialDef, 'id' | 'name' | 'kind'> & Partial<SpecialDe
   height: 'mid',
   knockback: 160,
   hitstun: 22,
+  blockstun: 12,
   reach: 20,
   damage: 0,
+  chip: 0,
   ...p,
 });
 

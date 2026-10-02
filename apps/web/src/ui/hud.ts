@@ -42,6 +42,9 @@ export class Hud {
         case 'roundWon': return null;
         case 'matchWon':
           return `${rosterEntry(snap[ev.winner].rosterId).name.toUpperCase()} TRIUNFA`;
+        case 'specialUsed':
+          return rosterEntry(snap[ev.fighter].rosterId).special.name.toUpperCase();
+        case 'countered': return '¡CONTRARREFUTADO!';
         default: return null;
       }
     })();

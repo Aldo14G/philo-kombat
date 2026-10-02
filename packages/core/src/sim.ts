@@ -1,7 +1,8 @@
 import { CONFIG } from './config.js';
 import { EMPTY_INPUT } from './types.js';
 import { MOVES } from './moves.js';
-import type { MoveDef } from './moves.js';
+import { rosterEntry } from './roster.js';
+import type { MoveDef, SpecialDef } from './moves.js';
 import type { FightEvent, FightEventBody, FightState, FighterInput, FighterState, FighterId, Phase, StageId } from './types.js';
 
 const U = CONFIG.unitsPerPixel;
@@ -34,6 +35,8 @@ function fighter(rosterId: FighterId, x: number, facing: 1 | -1): FighterState {
     lastInputMask: 0,
     lastHitBy: null,
     empowered: false,
+    absorbUntil: 0,
+    teleportPending: false,
   };
 }
 
@@ -52,6 +55,8 @@ export function createFight(
     stage,
     p1: fighter(p1Id, margin, 1),
     p2: fighter(p2Id, CONFIG.stageWidth * U - margin, -1),
+    projectiles: [],
+    nextProjectileId: 1,
     nextEventSeq: 1,
     config: CONFIG,
     seed,
@@ -82,8 +87,38 @@ const ATTACK_BITS: ReadonlyArray<[number, string]> = [
   [8, 'hk'],
 ];
 
-function moveTotal(m: MoveDef): number {
+function moveTotal(m: { startup: number; active: number; recovery: number }): number {
   return m.startup + m.active + m.recovery;
+}
+
+/** Frame-data lookup covering shared moves and the fighter's signature special. */
+function moveFor(f: FighterState, moveId: string): MoveDef | SpecialDef | undefined {
+  return MOVES[moveId] ?? (rosterEntry(f.rosterId).special.id === moveId ? rosterEntry(f.rosterId).special : undefined);
+}
+
+/** Special edge: cooldown-gated, grounded, in control. Sets up kind-specific state. */
+function tryStartSpecial(state: FightState, events: FightEvent[], side: 'p1' | 'p2', f: FighterState): void {
+  if (!inputPressed(f, 16) || f.specialCooldown > 0 || f.y !== 0 || !FREE.has(f.status)) return;
+  const spec = rosterEntry(f.rosterId).special;
+  f.status = 'special';
+  f.moveId = spec.id;
+  f.statusTicks = moveTotal(spec);
+  f.attackSeq += 1;
+  f.blocking = false;
+  f.specialCooldown = CONFIG.specialCooldownTicks;
+  switch (spec.kind) {
+    case 'counter':
+    case 'empower':
+      f.absorbUntil = state.tick + spec.startup + spec.active;
+      if (spec.kind === 'empower') f.empowered = true;
+      break;
+    case 'teleport':
+      f.teleportPending = true;
+      break;
+    default:
+      break;
+  }
+  emit(state, events, { type: 'specialUsed', fighter: side, moveId: spec.id });
 }
 
 /** Grounded fighters in control can start an attack on a fresh button edge. */
@@ -155,16 +190,70 @@ function resolveAttacks(state: FightState, events: FightEvent[]): void {
     ['p2', state.p2, state.p1],
   ] as const) {
     if ((attacker.status !== 'attack' && attacker.status !== 'special') || !attacker.moveId) continue;
-    const move = MOVES[attacker.moveId];
+    const move = moveFor(attacker, attacker.moveId);
     if (!move) continue;
     const elapsed = moveTotal(move) - attacker.statusTicks;
+    const spec = 'kind' in move ? move : null;
+
+    // --- signature behaviors keyed on elapsed frames
+    if (spec) {
+      if (elapsed === move.startup) {
+        switch (spec.kind) {
+          case 'teleport': {
+            const behind = CONFIG.fighterHalfWidth * 2 * U + 4 * U;
+            attacker.x = victim.x - victim.facing * behind;
+            attacker.teleportPending = false;
+            break;
+          }
+          case 'projectile': {
+            state.projectiles.push({
+              id: state.nextProjectileId++,
+              owner: side,
+              moveId: spec.id,
+              x: attacker.x + attacker.facing * (CONFIG.fighterHalfWidth + 4) * U,
+              y: 0,
+              vx: attacker.facing * 220,
+              ttl: 100,
+            });
+            emit(state, events, { type: 'projectileSpawned', fighter: side, moveId: spec.id });
+            break;
+          }
+          default:
+            break;
+        }
+      }
+      if (elapsed >= move.startup && elapsed < move.startup + move.active) {
+        if (spec.kind === 'dash' || spec.kind === 'rush') {
+          attacker.x += attacker.facing * CONFIG.airSpeed * 2;
+        }
+      }
+    }
+
     const inActive = elapsed >= move.startup && elapsed < move.startup + move.active;
-    const attackTag = `${side}:${attacker.attackSeq}`;
+    // rush hits multiple times: tag includes an active-window slice
+    const slice = spec?.kind === 'rush' ? `:${Math.floor(elapsed / 4)}` : '';
+    const attackTag = `${side}:${attacker.attackSeq}${slice}`;
     if (!inActive || victim.lastHitBy === attackTag) continue;
 
     switch (resolveHit(attacker, victim, move)) {
       case 'hit': {
         victim.lastHitBy = attackTag;
+        // absorbed hits: counter reflects, empower shrugs it off
+        if (victim.absorbUntil > state.tick) {
+          victim.absorbUntil = 0;
+          const victimSpec = rosterEntry(victim.rosterId).special;
+          if (victimSpec.kind === 'counter') {
+            attacker.health = Math.max(0, attacker.health - move.damage);
+            attacker.status = 'hitstun';
+            attacker.statusTicks = move.hitstun;
+            attacker.moveId = null;
+            attacker.vx = move.knockback * -attacker.facing;
+            emit(state, events, { type: 'countered', fighter: side === 'p1' ? 'p2' : 'p1', moveId: victimSpec.id });
+          } else {
+            emit(state, events, { type: 'blocked', fighter: side, moveId: move.id });
+          }
+          break;
+        }
         const damage = attacker.empowered ? move.damage * 2 : move.damage;
         attacker.empowered = false;
         victim.health = Math.max(0, victim.health - damage);
@@ -187,6 +276,38 @@ function resolveAttacks(state: FightState, events: FightEvent[]): void {
       }
     }
   }
+}
+
+/** Step travelling hitboxes; they die on walls, expiry, or contact. */
+function resolveProjectiles(state: FightState, events: FightEvent[]): void {
+  const keep: typeof state.projectiles = [];
+  for (const p of state.projectiles) {
+    p.x += p.vx;
+    p.ttl -= 1;
+    const victim = p.owner === 'p1' ? state.p2 : state.p1;
+    const spec = rosterEntry(state[p.owner].rosterId).special;
+    const dist = Math.abs(victim.x - p.x) - CONFIG.fighterHalfWidth * U;
+    if (dist <= 4 * U && victim.status !== 'ko') {
+      if (victim.blocking) {
+        victim.health = Math.max(0, victim.health - Math.floor(spec.damage * 0.15));
+        victim.status = 'blockstun';
+        victim.statusTicks = spec.hitstun / 2 | 0;
+        victim.vx = (spec.knockback / 2) * Math.sign(p.vx) || 0;
+        emit(state, events, { type: 'blocked', fighter: p.owner, moveId: p.moveId });
+      } else {
+        victim.health = Math.max(0, victim.health - spec.damage);
+        victim.status = 'hitstun';
+        victim.statusTicks = spec.hitstun;
+        victim.moveId = null;
+        victim.blocking = false;
+        victim.vx = spec.knockback * Math.sign(p.vx);
+        emit(state, events, { type: 'hit', fighter: p.owner, moveId: p.moveId, damage: spec.damage });
+      }
+      continue; // consumed
+    }
+    if (p.ttl > 0 && p.x > 0 && p.x < CONFIG.stageWidth * U) keep.push(p);
+  }
+  state.projectiles = keep;
 }
 
 function applyPhysics(f: FighterState): void {
@@ -257,7 +378,10 @@ function resetRoundPositions(state: FightState): void {
     f.blocking = false;
     f.lastHitBy = null;
     f.empowered = false;
+    f.absorbUntil = 0;
+    f.teleportPending = false;
   }
+  state.projectiles = [];
 }
 
 function endRound(state: FightState, events: FightEvent[], winner: 'p1' | 'p2'): void {
@@ -306,11 +430,14 @@ export function stepFight(state: FightState, p1Input: FighterInput = EMPTY_INPUT
       break;
     }
     case 'fighting': {
+      tryStartSpecial(state, events, 'p1', state.p1);
+      tryStartSpecial(state, events, 'p2', state.p2);
       tryStartAttack(state, events, 'p1', state.p1);
       tryStartAttack(state, events, 'p2', state.p2);
       applyMovement(state, state.p1, p1Input);
       applyMovement(state, state.p2, p2Input);
       resolveAttacks(state, events);
+      resolveProjectiles(state, events);
       state.phaseTicks -= 1;
       if (state.p1.health <= 0 || state.p2.health <= 0) {
         const loser = state.p1.health <= 0 ? 'p1' : 'p2';
